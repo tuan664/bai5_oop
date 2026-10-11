@@ -1,4 +1,7 @@
 using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Linq;
 using System.Text;
 
 public enum DeviceStatus
@@ -8,29 +11,46 @@ public enum DeviceStatus
     Retired
 }
 
-// Mô hình ban đầu: thông tin chung và một loại thiết bị.
-public class Device
+public enum PrinterType
 {
-    public string DeviceId { get; set; } = "";
-    public string Name { get; set; } = "";
-    public int YearIntroduced { get; set; }
-    public decimal PurchasePrice { get; set; }
-    public DeviceStatus Status { get; set; }
+    Laser,
+    Inkjet
+}
 
-    public Device(string deviceId, string name, int yearIntroduced,
+// Lớp cơ sở trừu tượng chứa dữ liệu chung của thiết bị.
+public abstract class Device
+{
+    public string DeviceId { get; }
+    public string Name { get; private set; }
+    public int YearIntroduced { get; private set; }
+    public decimal PurchasePrice { get; private set; }
+    public DeviceStatus Status { get; private set; }
+
+    protected Device(string deviceId, string name, int yearIntroduced,
         decimal purchasePrice, DeviceStatus status = DeviceStatus.Active)
     {
-        DeviceId = deviceId;
-        Name = name;
+        if (string.IsNullOrWhiteSpace(deviceId))
+            throw new ArgumentException("Mã thiết bị không được rỗng.");
+        if (string.IsNullOrWhiteSpace(name))
+            throw new ArgumentException("Tên thiết bị không được rỗng.");
+        if (yearIntroduced > DateTime.Now.Year)
+            throw new ArgumentException("Năm sử dụng không được lớn hơn năm hiện tại.");
+        if (purchasePrice <= 0)
+            throw new ArgumentException("Giá mua phải lớn hơn 0.");
+
+        DeviceId = deviceId.Trim();
+        Name = name.Trim();
         YearIntroduced = yearIntroduced;
         PurchasePrice = purchasePrice;
         Status = status;
     }
 
-    public virtual decimal CalculateAnnualMaintenanceCost()
+    public void UpdateStatus(DeviceStatus status)
     {
-        return PurchasePrice * 0.05m;
+        Status = status;
     }
+
+    public abstract decimal CalculateAnnualMaintenanceCost();
 
     public override string ToString()
     {
@@ -41,9 +61,9 @@ public class Device
 
 public class Computer : Device
 {
-    public int RamGB { get; set; }
-    public string ProcessorType { get; set; } = "";
-    public bool HasDedicatedGpu { get; set; }
+    public int RamGB { get; private set; }
+    public string ProcessorType { get; private set; }
+    public bool HasDedicatedGpu { get; private set; }
 
     public Computer(string deviceId, string name, int yearIntroduced,
         decimal purchasePrice, int ramGB, string processorType,
@@ -58,46 +78,197 @@ public class Computer : Device
     public override decimal CalculateAnnualMaintenanceCost()
     {
         decimal cost = PurchasePrice * 0.05m;
-        if (HasDedicatedGpu)
-            cost += PurchasePrice * 0.02m;
-        if (DateTime.Now.Year - YearIntroduced > 5)
-            cost += PurchasePrice * 0.01m;
+        if (HasDedicatedGpu) cost += PurchasePrice * 0.02m;
+        if (DateTime.Now.Year - YearIntroduced > 5) cost += PurchasePrice * 0.01m;
         return cost;
     }
 
-    public override string ToString()
+    public override string ToString() => base.ToString() +
+        $" | RAM: {RamGB} GB | CPU: {ProcessorType} | GPU rời: {(HasDedicatedGpu ? "Có" : "Không")}";
+}
+
+public class Printer : Device
+{
+    public PrinterType Type { get; private set; }
+    public int PagesPrinted { get; private set; }
+    public bool IsColor { get; private set; }
+
+    public Printer(string deviceId, string name, int yearIntroduced,
+        decimal purchasePrice, PrinterType type, int pagesPrinted,
+        bool isColor, DeviceStatus status = DeviceStatus.Active)
+        : base(deviceId, name, yearIntroduced, purchasePrice, status)
     {
-        return base.ToString() +
-               $" | RAM: {RamGB} GB | CPU: {ProcessorType} | GPU rời: {HasDedicatedGpu}";
+        Type = type;
+        PagesPrinted = pagesPrinted;
+        IsColor = isColor;
     }
+
+    public override decimal CalculateAnnualMaintenanceCost()
+    {
+        decimal cost = PurchasePrice * 0.04m;
+        if (PagesPrinted > 100000) cost += 500000m;
+        if (IsColor) cost += 300000m;
+        return cost;
+    }
+
+    public override string ToString() => base.ToString() +
+        $" | Loại: {Type} | Số trang: {PagesPrinted} | In màu: {(IsColor ? "Có" : "Không")}";
+}
+
+public class Projector : Device
+{
+    public int BrightnessLumen { get; private set; }
+    public int LampHours { get; private set; }
+
+    public Projector(string deviceId, string name, int yearIntroduced,
+        decimal purchasePrice, int brightnessLumen, int lampHours,
+        DeviceStatus status = DeviceStatus.Active)
+        : base(deviceId, name, yearIntroduced, purchasePrice, status)
+    {
+        BrightnessLumen = brightnessLumen;
+        LampHours = lampHours;
+    }
+
+    public override decimal CalculateAnnualMaintenanceCost()
+    {
+        decimal cost = PurchasePrice * 0.03m;
+        if (LampHours > 3000) cost += 1500000m;
+        return cost;
+    }
+
+    public override string ToString() => base.ToString() +
+        $" | Độ sáng: {BrightnessLumen} lumen | Giờ bóng đèn: {LampHours}";
 }
 
 public class Program
 {
+    private static readonly List<Device> Devices = new List<Device>();
+
     public static void Main()
     {
         Console.OutputEncoding = new UTF8Encoding(false);
-        Console.WriteLine("===== BẢN ĐẦU: NHẬP THÔNG TIN MÁY TÍNH =====");
+        while (true)
+        {
+            Console.WriteLine("\n===== QUẢN LÝ THIẾT BỊ - BẢN 2 =====");
+            Console.WriteLine("1. Thêm thiết bị");
+            Console.WriteLine("2. Xem danh sách thiết bị");
+            Console.WriteLine("3. Tính tổng chi phí bảo trì");
+            Console.WriteLine("0. Thoát");
+            int choice = ReadInt("Chọn chức năng: ");
 
-        Console.Write("Mã thiết bị: ");
-        string id = Console.ReadLine() ?? "";
-        Console.Write("Tên thiết bị: ");
-        string name = Console.ReadLine() ?? "";
-        Console.Write("Năm đưa vào sử dụng: ");
-        int year = int.Parse(Console.ReadLine() ?? "0");
-        Console.Write("Giá mua: ");
-        decimal price = decimal.Parse(Console.ReadLine() ?? "0");
-        Console.Write("RAM (GB): ");
-        int ram = int.Parse(Console.ReadLine() ?? "0");
-        Console.Write("Loại bộ xử lý: ");
-        string cpu = Console.ReadLine() ?? "";
-        Console.Write("Có GPU rời? (y/n): ");
-        bool gpu = (Console.ReadLine() ?? "").Trim().ToLower() == "y";
+            if (choice == 0) return;
+            try
+            {
+                if (choice == 1) AddDevice();
+                else if (choice == 2) DisplayDevices();
+                else if (choice == 3) DisplayTotalCost();
+                else Console.WriteLine("Lựa chọn không hợp lệ.");
+            }
+            catch (ArgumentException ex)
+            {
+                Console.WriteLine("Dữ liệu không hợp lệ: " + ex.Message);
+            }
+        }
+    }
 
-        Computer computer = new Computer(id, name, year, price, ram, cpu, gpu);
+    private static void AddDevice()
+    {
+        Console.WriteLine("1. Máy tính  2. Máy in  3. Máy chiếu");
+        int type = ReadInt("Loại thiết bị: ");
+        string id = ReadText("Mã thiết bị: ");
+        string name = ReadText("Tên thiết bị: ");
+        int year = ReadInt("Năm đưa vào sử dụng: ");
+        decimal price = ReadDecimal("Giá mua: ");
+        Device device;
 
-        Console.WriteLine("\n===== THÔNG TIN THIẾT BỊ =====");
-        Console.WriteLine(computer);
-        Console.WriteLine($"Chi phí bảo trì dự kiến: {computer.CalculateAnnualMaintenanceCost():N0} VND");
+        if (type == 1)
+        {
+            int ram = ReadInt("RAM (GB): ");
+            string cpu = ReadText("Loại bộ xử lý: ");
+            bool gpu = ReadBool("Có GPU rời không? (1=có, 0=không): ");
+            device = new Computer(id, name, year, price, ram, cpu, gpu);
+        }
+        else if (type == 2)
+        {
+            PrinterType printerType = ReadInt("Loại máy in (1=Laser, 2=Inkjet): ") == 1
+                ? PrinterType.Laser : PrinterType.Inkjet;
+            int pages = ReadInt("Số trang đã in: ");
+            bool color = ReadBool("Máy in màu? (1=có, 0=không): ");
+            device = new Printer(id, name, year, price, printerType, pages, color);
+        }
+        else if (type == 3)
+        {
+            int lumen = ReadInt("Độ sáng (lumen): ");
+            int hours = ReadInt("Số giờ sử dụng bóng đèn: ");
+            device = new Projector(id, name, year, price, lumen, hours);
+        }
+        else
+        {
+            Console.WriteLine("Loại thiết bị không hợp lệ.");
+            return;
+        }
+
+        Devices.Add(device);
+        Console.WriteLine("Đã thêm thiết bị.");
+    }
+
+    private static void DisplayDevices()
+    {
+        if (Devices.Count == 0)
+        {
+            Console.WriteLine("Chưa có thiết bị.");
+            return;
+        }
+
+        foreach (Device device in Devices)
+        {
+            Console.WriteLine(device);
+            Console.WriteLine($"Chi phí bảo trì: {device.CalculateAnnualMaintenanceCost():N0} VND");
+        }
+    }
+
+    private static void DisplayTotalCost()
+    {
+        decimal total = 0;
+        foreach (Device device in Devices)
+            total += device.CalculateAnnualMaintenanceCost();
+        Console.WriteLine($"Tổng chi phí bảo trì: {total:N0} VND");
+    }
+
+    private static string ReadText(string prompt)
+    {
+        Console.Write(prompt);
+        return Console.ReadLine() ?? "";
+    }
+
+    private static int ReadInt(string prompt)
+    {
+        while (true)
+        {
+            Console.Write(prompt);
+            if (int.TryParse(Console.ReadLine(), out int value)) return value;
+            Console.WriteLine("Vui lòng nhập số nguyên.");
+        }
+    }
+
+    private static decimal ReadDecimal(string prompt)
+    {
+        while (true)
+        {
+            Console.Write(prompt);
+            if (decimal.TryParse(Console.ReadLine(), out decimal value)) return value;
+            Console.WriteLine("Vui lòng nhập số hợp lệ.");
+        }
+    }
+
+    private static bool ReadBool(string prompt)
+    {
+        while (true)
+        {
+            int answer = ReadInt(prompt);
+            if (answer == 1) return true;
+            if (answer == 0) return false;
+            Console.WriteLine("Chỉ nhập 1 hoặc 0.");
+        }
     }
 }
