@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
+using System.Net;
 using System.Text;
 
 public enum DeviceStatus { Active, UnderMaintenance, Retired }
@@ -12,6 +14,31 @@ public interface INetworkable
     void Connect(string ipAddress);
     void Disconnect();
     bool IsConnected { get; }
+}
+
+// Thành phần được kết tập để dùng chung quy tắc kết nối mạng.
+public sealed class NetworkConnection
+{
+    public string IpAddress { get; private set; } = "";
+    public bool IsConnected { get; private set; }
+
+    public void Connect(string ipAddress)
+    {
+        if (string.IsNullOrWhiteSpace(ipAddress))
+            throw new ArgumentException("Địa chỉ IP không được rỗng.");
+        if (!IPAddress.TryParse(ipAddress.Trim(), out _))
+            throw new ArgumentException("Địa chỉ IP không đúng định dạng.");
+        if (IsConnected)
+            throw new InvalidOperationException("Thiết bị đang kết nối mạng.");
+        IpAddress = ipAddress.Trim();
+        IsConnected = true;
+    }
+
+    public void Disconnect()
+    {
+        IpAddress = "";
+        IsConnected = false;
+    }
 }
 
 public abstract class Device
@@ -27,29 +54,38 @@ public abstract class Device
     {
         if (string.IsNullOrWhiteSpace(deviceId)) throw new ArgumentException("Mã thiết bị không được rỗng.");
         if (string.IsNullOrWhiteSpace(name)) throw new ArgumentException("Tên thiết bị không được rỗng.");
-        if (yearIntroduced > DateTime.Now.Year) throw new ArgumentException("Năm sử dụng không được ở tương lai.");
+        if (yearIntroduced < 1 || yearIntroduced > DateTime.Now.Year) throw new ArgumentException("Năm sử dụng không hợp lệ.");
         if (purchasePrice <= 0) throw new ArgumentException("Giá mua phải lớn hơn 0.");
+        if (!Enum.IsDefined(typeof(DeviceStatus), status)) throw new ArgumentException("Trạng thái thiết bị không hợp lệ.");
         DeviceId = deviceId.Trim(); Name = name.Trim(); YearIntroduced = yearIntroduced;
         PurchasePrice = purchasePrice; Status = status;
     }
 
-    public void UpdateStatus(DeviceStatus status) => Status = status;
+    public void UpdateStatus(DeviceStatus status)
+    {
+        if (!Enum.IsDefined(typeof(DeviceStatus), status)) throw new ArgumentException("Trạng thái không hợp lệ.");
+        Status = status;
+    }
+
     public abstract decimal CalculateAnnualMaintenanceCost();
-    public override string ToString() => $"{DeviceId} | {Name} | Năm: {YearIntroduced} | Giá: {PurchasePrice:N0} VND | {Status}";
+    public override string ToString() => $"{DeviceId} | {Name} | Năm: {YearIntroduced} | Giá mua: {PurchasePrice:N0} VND | Trạng thái: {Status}";
 }
 
 public class Computer : Device, INetworkable
 {
+    private readonly NetworkConnection _network = new NetworkConnection();
     public int RamGB { get; private set; }
     public string ProcessorType { get; private set; }
     public bool HasDedicatedGpu { get; private set; }
-    public string IpAddress { get; private set; } = "";
-    public bool IsConnected { get; private set; }
+    public string IpAddress => _network.IpAddress;
+    public bool IsConnected => _network.IsConnected;
 
     public Computer(string id, string name, int year, decimal price, int ram, string cpu, bool gpu,
         DeviceStatus status = DeviceStatus.Active) : base(id, name, year, price, status)
     {
-        RamGB = ram; ProcessorType = cpu; HasDedicatedGpu = gpu;
+        if (ram <= 0) throw new ArgumentException("RAM phải lớn hơn 0.");
+        if (string.IsNullOrWhiteSpace(cpu)) throw new ArgumentException("Loại bộ xử lý không được rỗng.");
+        RamGB = ram; ProcessorType = cpu.Trim(); HasDedicatedGpu = gpu;
     }
 
     public override decimal CalculateAnnualMaintenanceCost()
@@ -59,10 +95,9 @@ public class Computer : Device, INetworkable
         if (DateTime.Now.Year - YearIntroduced > 5) cost += PurchasePrice * 0.01m;
         return cost;
     }
-
-    public void Connect(string ipAddress) { IpAddress = ipAddress; IsConnected = true; }
-    public void Disconnect() { IsConnected = false; }
-    public override string ToString() => base.ToString() + $" | RAM: {RamGB} GB | CPU: {ProcessorType} | GPU rời: {HasDedicatedGpu}";
+    public void Connect(string ipAddress) => _network.Connect(ipAddress);
+    public void Disconnect() => _network.Disconnect();
+    public override string ToString() => base.ToString() + $" | RAM: {RamGB} GB | CPU: {ProcessorType} | GPU rời: {(HasDedicatedGpu ? "Có" : "Không")}";
 }
 
 public class Printer : Device
@@ -74,30 +109,26 @@ public class Printer : Device
 
     public Printer(string id, string name, int year, decimal price, PrinterType type, int pages, bool color,
         DeviceStatus status = DeviceStatus.Active) : base(id, name, year, price, status)
-    { Type = type; PagesPrinted = pages; IsColor = color; }
-
-    public override decimal CalculateAnnualMaintenanceCost()
     {
-        decimal cost = PurchasePrice * 0.04m;
-        if (PagesPrinted > 100000) cost += 500000m;
-        if (IsColor) cost += 300000m;
-        return cost;
+        if (!Enum.IsDefined(typeof(PrinterType), type)) throw new ArgumentException("Loại máy in không hợp lệ.");
+        if (pages < 0) throw new ArgumentException("Số trang đã in không được âm.");
+        Type = type; PagesPrinted = pages; IsColor = color;
     }
-    public override string ToString() => base.ToString() + $" | Loại: {Type} | Trang: {PagesPrinted} | Màu: {IsColor}";
+
+    public override decimal CalculateAnnualMaintenanceCost() => PurchasePrice * 0.04m + (PagesPrinted > 100000 ? 500000m : 0m) + (IsColor ? 300000m : 0m);
+    public override string ToString() => base.ToString() + $" | Loại: {Type} | Số trang: {PagesPrinted} | In màu: {(IsColor ? "Có" : "Không")} | Mạng: {(SupportsNetwork ? "Có" : "Không")}";
 }
 
 public class NetworkPrinter : Printer, INetworkable
 {
-    public string IpAddress { get; private set; } = "";
-    public bool IsConnected { get; private set; }
+    private readonly NetworkConnection _network = new NetworkConnection();
     public override bool SupportsNetwork => true;
-
-    public NetworkPrinter(string id, string name, int year, decimal price, PrinterType type,
-        int pages, bool color, DeviceStatus status = DeviceStatus.Active)
-        : base(id, name, year, price, type, pages, color, status) { }
-
-    public void Connect(string ipAddress) { IpAddress = ipAddress; IsConnected = true; }
-    public void Disconnect() { IsConnected = false; }
+    public string IpAddress => _network.IpAddress;
+    public bool IsConnected => _network.IsConnected;
+    public NetworkPrinter(string id, string name, int year, decimal price, PrinterType type, int pages, bool color,
+        DeviceStatus status = DeviceStatus.Active) : base(id, name, year, price, type, pages, color, status) { }
+    public void Connect(string ipAddress) => _network.Connect(ipAddress);
+    public void Disconnect() => _network.Disconnect();
 }
 
 public class Projector : Device
@@ -106,12 +137,15 @@ public class Projector : Device
     public int LampHours { get; private set; }
     public Projector(string id, string name, int year, decimal price, int lumen, int hours,
         DeviceStatus status = DeviceStatus.Active) : base(id, name, year, price, status)
-    { BrightnessLumen = lumen; LampHours = hours; }
+    {
+        if (lumen <= 0) throw new ArgumentException("Độ sáng phải lớn hơn 0.");
+        if (hours < 0) throw new ArgumentException("Số giờ sử dụng không được âm.");
+        BrightnessLumen = lumen; LampHours = hours;
+    }
     public override decimal CalculateAnnualMaintenanceCost() => PurchasePrice * 0.03m + (LampHours > 3000 ? 1500000m : 0m);
     public override string ToString() => base.ToString() + $" | Độ sáng: {BrightnessLumen} lumen | Giờ bóng đèn: {LampHours}";
 }
 
-// Phòng tập hợp các thiết bị; hiện mới chặn null và mã trùng trong chính phòng.
 public class LabRoom
 {
     private readonly List<Device> _devices = new List<Device>();
@@ -122,24 +156,27 @@ public class LabRoom
     public LabRoom(string roomId, string roomName, int capacity)
     {
         if (string.IsNullOrWhiteSpace(roomId)) throw new ArgumentException("Mã phòng không được rỗng.");
-        RoomId = roomId.Trim(); RoomName = roomName; Capacity = capacity;
+        if (string.IsNullOrWhiteSpace(roomName)) throw new ArgumentException("Tên phòng không được rỗng.");
+        if (capacity <= 0) throw new ArgumentException("Sức chứa phải lớn hơn 0.");
+        RoomId = roomId.Trim(); RoomName = roomName.Trim(); Capacity = capacity;
     }
 
     public void AddDevice(Device device)
     {
         if (device == null) throw new ArgumentNullException(nameof(device));
         if (_devices.Any(d => string.Equals(d.DeviceId, device.DeviceId, StringComparison.OrdinalIgnoreCase)))
-            throw new InvalidOperationException("Mã thiết bị đã có trong phòng.");
+            throw new InvalidOperationException("Mã thiết bị đã tồn tại trong phòng.");
+        if (_devices.Count >= Capacity) throw new InvalidOperationException("Phòng đã đủ sức chứa.");
         _devices.Add(device);
     }
 
     public bool RemoveDevice(string deviceId)
     {
         Device? device = FindDevice(deviceId);
-        if (device == null) return false;
-        return _devices.Remove(device);
+        return device != null && _devices.Remove(device);
     }
-    public Device? FindDevice(string deviceId) => _devices.FirstOrDefault(d => d.DeviceId == deviceId);
+
+    public Device? FindDevice(string deviceId) => _devices.FirstOrDefault(d => string.Equals(d.DeviceId, deviceId, StringComparison.OrdinalIgnoreCase));
     public decimal CalculateAnnualMaintenanceCost() => _devices.Sum(d => d.CalculateAnnualMaintenanceCost());
     public List<Device> GetDevicesRequiringMaintenance() => _devices.Where(d => d.Status == DeviceStatus.UnderMaintenance || DateTime.Now.Year - d.YearIntroduced > 5).ToList();
     public IReadOnlyList<Device> GetDevices() => _devices.AsReadOnly();
@@ -153,184 +190,267 @@ public class Program
     public static void Main()
     {
         Console.OutputEncoding = new UTF8Encoding(false);
+        LoadSampleData();
         while (true)
         {
-            Console.WriteLine("\n===== QUẢN LÝ THIẾT BỊ - BẢN 3 =====");
+            Console.WriteLine("\n===== HỆ THỐNG QUẢN LÝ THIẾT BỊ VÀ BẢO TRÌ =====");
             Console.WriteLine("1. Thêm thiết bị");
-            Console.WriteLine("2. Xem thiết bị");
-            Console.WriteLine("3. Thêm phòng");
-            Console.WriteLine("4. Phân bổ thiết bị vào phòng");
-            Console.WriteLine("5. Xem thiết bị và chi phí theo phòng");
-            Console.WriteLine("6. Xem thiết bị có khả năng mạng");
+            Console.WriteLine("2. Xem toàn bộ thiết bị");
+            Console.WriteLine("3. Thêm phòng thực hành");
+            Console.WriteLine("4. Xem danh sách phòng");
+            Console.WriteLine("5. Phân bổ thiết bị vào phòng");
+            Console.WriteLine("6. Xem thiết bị theo phòng");
+            Console.WriteLine("7. Tìm kiếm thiết bị");
+            Console.WriteLine("8. Xóa thiết bị khỏi phòng");
+            Console.WriteLine("9. Báo cáo chi phí và thiết bị cần bảo trì");
+            Console.WriteLine("10. Quản lý kết nối mạng");
+            Console.WriteLine("11. Cập nhật trạng thái thiết bị");
             Console.WriteLine("0. Thoát");
-            int choice = ReadInt("Chọn: ");
+
+            int choice = ReadIntInRange("Chọn chức năng: ", 0, 11);
             try
             {
                 switch (choice)
                 {
                     case 1: AddDevice(); break;
-                    case 2: ShowDevices(); break;
+                    case 2: DisplayAllDevices(); break;
                     case 3: AddRoom(); break;
-                    case 4: AssignDevice(); break;
-                    case 5: ShowRoomReport(); break;
-                    case 6: ShowNetworkDevices(); break;
-                    case 0: return;
-                    default: Console.WriteLine("Lựa chọn không hợp lệ."); break;
+                    case 4: DisplayRooms(); break;
+                    case 5: AssignDevice(); break;
+                    case 6: DisplayRoomDevices(); break;
+                    case 7: FindDevice(); break;
+                    case 8: RemoveDeviceFromRoom(); break;
+                    case 9: MaintenanceReport(); break;
+                    case 10: NetworkMenu(); break;
+                    case 11: UpdateDeviceStatus(); break;
+                    case 0: Console.WriteLine("Đã thoát chương trình."); return;
                 }
             }
-            catch (ArgumentException ex)
-            {
-                Console.WriteLine("Dữ liệu không hợp lệ: " + ex.Message);
-            }
-            catch (InvalidOperationException ex)
-            {
-                Console.WriteLine("Không thực hiện được: " + ex.Message);
-            }
+            catch (ArgumentException ex) { Console.WriteLine("Dữ liệu không hợp lệ: " + ex.Message); }
+            catch (InvalidOperationException ex) { Console.WriteLine("Không thể thực hiện: " + ex.Message); }
         }
+    }
+
+    private static void LoadSampleData()
+    {
+        Device c1 = new Computer("C001", "Máy tính A", 2022, 20000000m, 16, "Intel Core i5", false);
+        Device c2 = new Computer("C002", "Máy tính B", 2018, 30000000m, 32, "Intel Core i7", true, DeviceStatus.UnderMaintenance);
+        Device p1 = new Printer("P001", "Máy in laser", 2022, 5000000m, PrinterType.Laser, 50000, false);
+        Device p2 = new NetworkPrinter("P002", "Máy in màu mạng", 2019, 8000000m, PrinterType.Inkjet, 150000, true);
+        Device pj = new Projector("PJ001", "Máy chiếu A", 2021, 15000000m, 3500, 3500);
+        Devices.AddRange(new[] { c1, c2, p1, p2, pj });
+        LabRoom r1 = new LabRoom("R01", "Phòng thực hành 1", 3);
+        LabRoom r2 = new LabRoom("R02", "Phòng thực hành 2", 2);
+        r1.AddDevice(c1); r1.AddDevice(p1); r1.AddDevice(pj);
+        r2.AddDevice(c2); r2.AddDevice(p2);
+        Rooms.AddRange(new[] { r1, r2 });
     }
 
     private static void AddDevice()
     {
         Console.WriteLine("1. Máy tính  2. Máy in  3. Máy chiếu");
-        int type = ReadInt("Loại thiết bị: ");
-        string id = ReadText("Mã: ");
-        string name = ReadText("Tên: ");
-        int year = ReadInt("Năm sử dụng: ");
-        decimal price = ReadDecimal("Giá mua: ");
+        int type = ReadIntInRange("Loại thiết bị: ", 1, 3);
+        string id = ReadRequiredText("Mã thiết bị: ");
+        string name = ReadRequiredText("Tên thiết bị: ");
+        int year = ReadIntInRange("Năm đưa vào sử dụng: ", 1, DateTime.Now.Year);
+        decimal price = ReadPositiveDecimal("Giá mua (nhập số không dấu phân cách, ví dụ 20000000): ");
+        DeviceStatus status = ReadStatus();
         Device device;
 
         if (type == 1)
         {
-            int ram = ReadInt("RAM (GB): ");
-            string cpu = ReadText("Loại bộ xử lý: ");
-            bool gpu = ReadBool("Có GPU rời? (1=có, 0=không): ");
-            device = new Computer(id, name, year, price, ram, cpu, gpu);
+            int ram = ReadIntInRange("RAM (GB): ", 1, 1024);
+            string cpu = ReadRequiredText("Loại bộ xử lý: ");
+            bool gpu = ReadYesNo("Có GPU rời không?");
+            device = new Computer(id, name, year, price, ram, cpu, gpu, status);
         }
         else if (type == 2)
         {
-            PrinterType printerType = ReadInt("Loại máy in (1=Laser, 2=Inkjet): ") == 1
-                ? PrinterType.Laser : PrinterType.Inkjet;
-            int pages = ReadInt("Số trang đã in: ");
-            bool color = ReadBool("Máy in màu? (1=có, 0=không): ");
-            bool network = ReadBool("Máy in có mạng? (1=có, 0=không): ");
+            PrinterType printerType = ReadPrinterType();
+            int pages = ReadIntInRange("Số trang đã in: ", 0, int.MaxValue);
+            bool color = ReadYesNo("Máy in màu?");
+            bool network = ReadYesNo("Máy in hỗ trợ mạng?");
             device = network
-                ? new NetworkPrinter(id, name, year, price, printerType, pages, color)
-                : new Printer(id, name, year, price, printerType, pages, color);
-        }
-        else if (type == 3)
-        {
-            int lumen = ReadInt("Độ sáng (lumen): ");
-            int hours = ReadInt("Số giờ sử dụng bóng đèn: ");
-            device = new Projector(id, name, year, price, lumen, hours);
+                ? new NetworkPrinter(id, name, year, price, printerType, pages, color, status)
+                : new Printer(id, name, year, price, printerType, pages, color, status);
         }
         else
         {
-            Console.WriteLine("Loại thiết bị không hợp lệ.");
-            return;
+            int lumen = ReadIntInRange("Độ sáng (lumen): ", 1, int.MaxValue);
+            int hours = ReadIntInRange("Số giờ sử dụng bóng đèn: ", 0, int.MaxValue);
+            device = new Projector(id, name, year, price, lumen, hours, status);
         }
 
+        if (Devices.Any(d => string.Equals(d.DeviceId, device.DeviceId, StringComparison.OrdinalIgnoreCase)))
+            throw new InvalidOperationException("Mã thiết bị đã tồn tại trong hệ thống.");
         Devices.Add(device);
         Console.WriteLine("Đã thêm thiết bị.");
     }
 
-    private static void ShowDevices()
-    {
-        if (Devices.Count == 0) { Console.WriteLine("Chưa có thiết bị."); return; }
-        foreach (Device device in Devices)
-            Console.WriteLine($"{device}\nChi phí bảo trì: {device.CalculateAnnualMaintenanceCost():N0} VND\n");
-    }
-
     private static void AddRoom()
     {
-        string id = ReadText("Mã phòng: ");
-        string name = ReadText("Tên phòng: ");
-        int capacity = ReadInt("Sức chứa: ");
+        string id = ReadRequiredText("Mã phòng: ");
+        if (Rooms.Any(r => string.Equals(r.RoomId, id, StringComparison.OrdinalIgnoreCase)))
+            throw new InvalidOperationException("Mã phòng đã tồn tại.");
+        string name = ReadRequiredText("Tên phòng: ");
+        int capacity = ReadIntInRange("Sức chứa: ", 1, int.MaxValue);
         Rooms.Add(new LabRoom(id, name, capacity));
         Console.WriteLine("Đã thêm phòng.");
     }
 
     private static void AssignDevice()
     {
-        ShowDevices();
-        ShowRooms();
-        string id = ReadText("Mã thiết bị cần phân bổ: ");
-        string roomId = ReadText("Mã phòng nhận thiết bị: ");
-        Device? device = Devices.FirstOrDefault(d => d.DeviceId == id);
-        LabRoom? room = Rooms.FirstOrDefault(r => r.RoomId == roomId);
-        if (device == null || room == null)
-        {
-            Console.WriteLine("Không tìm thấy thiết bị hoặc phòng.");
-            return;
-        }
+        DisplayAllDevices(); DisplayRooms();
+        string id = ReadRequiredText("Mã thiết bị cần phân bổ: ");
+        string roomId = ReadRequiredText("Mã phòng nhận thiết bị: ");
+        Device? device = Devices.FirstOrDefault(d => string.Equals(d.DeviceId, id, StringComparison.OrdinalIgnoreCase));
+        LabRoom? room = Rooms.FirstOrDefault(r => string.Equals(r.RoomId, roomId, StringComparison.OrdinalIgnoreCase));
+        if (device == null) throw new InvalidOperationException("Không tìm thấy thiết bị.");
+        if (room == null) throw new InvalidOperationException("Không tìm thấy phòng.");
+        if (Rooms.Any(r => r.GetDevices().Any(d => string.Equals(d.DeviceId, device.DeviceId, StringComparison.OrdinalIgnoreCase))))
+            throw new InvalidOperationException("Thiết bị đã được phân bổ vào một phòng.");
         room.AddDevice(device);
         Console.WriteLine("Đã phân bổ thiết bị.");
     }
 
-    private static void ShowRoomReport()
+    private static void DisplayAllDevices()
     {
-        ShowRooms();
-        string id = ReadText("Mã phòng cần xem: ");
-        LabRoom? room = Rooms.FirstOrDefault(r => r.RoomId == id);
-        if (room == null) { Console.WriteLine("Không tìm thấy phòng."); return; }
-
-        Console.WriteLine($"\nPhòng: {room.RoomName}");
-        foreach (Device device in room.GetDevices()) Console.WriteLine(device);
-        Console.WriteLine($"Tổng chi phí bảo trì: {room.CalculateAnnualMaintenanceCost():N0} VND");
-        Console.WriteLine("Thiết bị cần bảo trì:");
-        foreach (Device device in room.GetDevicesRequiringMaintenance())
-            Console.WriteLine($"{device.DeviceId} - {device.Name}");
+        if (Devices.Count == 0) { Console.WriteLine("Chưa có thiết bị."); return; }
+        foreach (Device device in Devices)
+        {
+            LabRoom? room = Rooms.FirstOrDefault(r => r.GetDevices().Contains(device));
+            Console.WriteLine(device);
+            Console.WriteLine(room == null ? "Phòng: Chưa phân bổ" : $"Phòng: {room.RoomName}");
+        }
     }
 
-    private static void ShowRooms()
+    private static void DisplayRooms()
     {
         if (Rooms.Count == 0) { Console.WriteLine("Chưa có phòng."); return; }
         foreach (LabRoom room in Rooms)
-            Console.WriteLine($"{room.RoomId} - {room.RoomName} - Sức chứa {room.Capacity}");
+            Console.WriteLine($"{room.RoomId} | {room.RoomName} | Sức chứa {room.Capacity} | Đang có {room.GetDevices().Count} thiết bị");
     }
 
-    private static void ShowNetworkDevices()
+    private static void DisplayRoomDevices()
     {
-        foreach (Device device in Devices.Where(d => d is INetworkable))
+        DisplayRooms(); string id = ReadRequiredText("Mã phòng: ");
+        LabRoom? room = Rooms.FirstOrDefault(r => string.Equals(r.RoomId, id, StringComparison.OrdinalIgnoreCase));
+        if (room == null) throw new InvalidOperationException("Không tìm thấy phòng.");
+        Console.WriteLine($"\n{room.RoomName}");
+        foreach (Device device in room.GetDevices()) Console.WriteLine(device);
+        Console.WriteLine($"Tổng chi phí bảo trì: {room.CalculateAnnualMaintenanceCost():N0} VND");
+    }
+
+    private static void FindDevice()
+    {
+        string id = ReadRequiredText("Mã thiết bị: ");
+        Device? device = Devices.FirstOrDefault(d => string.Equals(d.DeviceId, id, StringComparison.OrdinalIgnoreCase));
+        if (device == null) throw new InvalidOperationException("Không tìm thấy thiết bị.");
+        Console.WriteLine(device);
+        Console.WriteLine($"Chi phí bảo trì: {device.CalculateAnnualMaintenanceCost():N0} VND");
+        LabRoom? room = Rooms.FirstOrDefault(r => r.GetDevices().Contains(device));
+        Console.WriteLine(room == null ? "Chưa phân bổ vào phòng." : $"Phòng: {room.RoomName}");
+    }
+
+    private static void RemoveDeviceFromRoom()
+    {
+        DisplayRooms(); string roomId = ReadRequiredText("Mã phòng: ");
+        LabRoom? room = Rooms.FirstOrDefault(r => string.Equals(r.RoomId, roomId, StringComparison.OrdinalIgnoreCase));
+        if (room == null) throw new InvalidOperationException("Không tìm thấy phòng.");
+        string deviceId = ReadRequiredText("Mã thiết bị cần bỏ khỏi phòng: ");
+        if (!room.RemoveDevice(deviceId)) throw new InvalidOperationException("Không tìm thấy thiết bị trong phòng.");
+        Console.WriteLine("Đã bỏ thiết bị khỏi phòng. Thiết bị vẫn được quản lý trong hệ thống.");
+    }
+
+    private static void MaintenanceReport()
+    {
+        foreach (LabRoom room in Rooms)
         {
-            INetworkable network = (INetworkable)device;
-            Console.WriteLine($"{device.DeviceId} - {device.Name} | Kết nối: {network.IsConnected} | IP: {network.IpAddress}");
+            Console.WriteLine($"\n{room.RoomName} — Tổng: {room.CalculateAnnualMaintenanceCost():N0} VND");
+            foreach (Device device in room.GetDevicesRequiringMaintenance())
+                Console.WriteLine($"Cần bảo trì: {device.DeviceId} - {device.Name}");
         }
     }
 
-    private static string ReadText(string prompt)
+    private static void NetworkMenu()
     {
-        Console.Write(prompt);
-        return Console.ReadLine() ?? "";
+        List<Device> networkDevices = Devices.Where(d => d is INetworkable).ToList();
+        if (networkDevices.Count == 0) { Console.WriteLine("Không có thiết bị hỗ trợ mạng."); return; }
+        foreach (Device device in networkDevices)
+        {
+            INetworkable networkDevice = (INetworkable)device;
+            Console.WriteLine($"{device.DeviceId} - {device.Name} | Kết nối: {networkDevice.IsConnected} | IP: {networkDevice.IpAddress}");
+        }
+
+        string id = ReadRequiredText("Mã thiết bị mạng cần thao tác: ");
+        Device? target = Devices.FirstOrDefault(d => string.Equals(d.DeviceId, id, StringComparison.OrdinalIgnoreCase));
+        if (target is not INetworkable network) throw new InvalidOperationException("Thiết bị không hỗ trợ mạng.");
+
+        Console.WriteLine("1. Kết nối");
+        Console.WriteLine("2. Ngắt kết nối");
+        int action = ReadIntInRange("Chọn thao tác: ", 1, 2);
+        if (action == 1)
+            network.Connect(ReadRequiredText("Địa chỉ IP: "));
+        else
+            network.Disconnect();
+
+        Console.WriteLine($"Kết nối: {network.IsConnected} | IP: {network.IpAddress}");
     }
 
-    private static int ReadInt(string prompt)
+    private static void UpdateDeviceStatus()
+    {
+        string id = ReadRequiredText("Mã thiết bị: ");
+        Device? device = Devices.FirstOrDefault(d => string.Equals(d.DeviceId, id, StringComparison.OrdinalIgnoreCase));
+        if (device == null) throw new InvalidOperationException("Không tìm thấy thiết bị.");
+        device.UpdateStatus(ReadStatus());
+        Console.WriteLine("Đã cập nhật trạng thái.");
+    }
+
+    private static string ReadRequiredText(string prompt)
     {
         while (true)
         {
-            Console.Write(prompt);
-            if (int.TryParse(Console.ReadLine(), out int value)) return value;
-            Console.WriteLine("Vui lòng nhập số nguyên.");
+            Console.Write(prompt); string value = Console.ReadLine() ?? "";
+            if (!string.IsNullOrWhiteSpace(value)) return value.Trim();
+            Console.WriteLine("Không được để trống.");
         }
     }
 
-    private static decimal ReadDecimal(string prompt)
+    private static int ReadIntInRange(string prompt, int min, int max)
     {
         while (true)
         {
-            Console.Write(prompt);
-            if (decimal.TryParse(Console.ReadLine(), out decimal value)) return value;
-            Console.WriteLine("Vui lòng nhập số hợp lệ.");
+            Console.Write(prompt); string input = Console.ReadLine() ?? "";
+            if (int.TryParse(input, out int value) && value >= min && value <= max) return value;
+            Console.WriteLine($"Nhập số nguyên từ {min} đến {max}.");
         }
     }
 
-    private static bool ReadBool(string prompt)
+    private static decimal ReadPositiveDecimal(string prompt)
     {
         while (true)
         {
-            int value = ReadInt(prompt);
-            if (value == 1) return true;
-            if (value == 0) return false;
-            Console.WriteLine("Chỉ nhập 1 hoặc 0.");
+            Console.Write(prompt); string input = Console.ReadLine() ?? "";
+            if (decimal.TryParse(input, NumberStyles.Number, CultureInfo.InvariantCulture, out decimal value) && value > 0) return value;
+            Console.WriteLine("Nhập số lớn hơn 0, ví dụ 20000000.");
         }
+    }
+
+    private static bool ReadYesNo(string prompt)
+    {
+        Console.WriteLine(prompt + " 1. Có  2. Không");
+        return ReadIntInRange("Chọn: ", 1, 2) == 1;
+    }
+
+    private static DeviceStatus ReadStatus()
+    {
+        Console.WriteLine("Trạng thái: 1. Active  2. UnderMaintenance  3. Retired");
+        return (DeviceStatus)(ReadIntInRange("Chọn: ", 1, 3) - 1);
+    }
+
+    private static PrinterType ReadPrinterType()
+    {
+        Console.WriteLine("Loại máy in: 1. Laser  2. Inkjet");
+        return ReadIntInRange("Chọn: ", 1, 2) == 1 ? PrinterType.Laser : PrinterType.Inkjet;
     }
 }
