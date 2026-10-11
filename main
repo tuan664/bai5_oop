@@ -1,0 +1,103 @@
+using System;
+using System.Text;
+
+public enum DeviceStatus
+{
+    Active,
+    UnderMaintenance,
+    Retired
+}
+
+// Mô hình ban đầu: thông tin chung và một loại thiết bị.
+public class Device
+{
+    public string DeviceId { get; set; } = "";
+    public string Name { get; set; } = "";
+    public int YearIntroduced { get; set; }
+    public decimal PurchasePrice { get; set; }
+    public DeviceStatus Status { get; set; }
+
+    public Device(string deviceId, string name, int yearIntroduced,
+        decimal purchasePrice, DeviceStatus status = DeviceStatus.Active)
+    {
+        DeviceId = deviceId;
+        Name = name;
+        YearIntroduced = yearIntroduced;
+        PurchasePrice = purchasePrice;
+        Status = status;
+    }
+
+    public virtual decimal CalculateAnnualMaintenanceCost()
+    {
+        return PurchasePrice * 0.05m;
+    }
+
+    public override string ToString()
+    {
+        return $"{DeviceId} | {Name} | Năm: {YearIntroduced} | " +
+               $"Giá mua: {PurchasePrice:N0} VND | Trạng thái: {Status}";
+    }
+}
+
+public class Computer : Device
+{
+    public int RamGB { get; set; }
+    public string ProcessorType { get; set; } = "";
+    public bool HasDedicatedGpu { get; set; }
+
+    public Computer(string deviceId, string name, int yearIntroduced,
+        decimal purchasePrice, int ramGB, string processorType,
+        bool hasDedicatedGpu, DeviceStatus status = DeviceStatus.Active)
+        : base(deviceId, name, yearIntroduced, purchasePrice, status)
+    {
+        RamGB = ramGB;
+        ProcessorType = processorType;
+        HasDedicatedGpu = hasDedicatedGpu;
+    }
+
+    public override decimal CalculateAnnualMaintenanceCost()
+    {
+        decimal cost = PurchasePrice * 0.05m;
+        if (HasDedicatedGpu)
+            cost += PurchasePrice * 0.02m;
+        if (DateTime.Now.Year - YearIntroduced > 5)
+            cost += PurchasePrice * 0.01m;
+        return cost;
+    }
+
+    public override string ToString()
+    {
+        return base.ToString() +
+               $" | RAM: {RamGB} GB | CPU: {ProcessorType} | GPU rời: {HasDedicatedGpu}";
+    }
+}
+
+public class Program
+{
+    public static void Main()
+    {
+        Console.OutputEncoding = new UTF8Encoding(false);
+        Console.WriteLine("===== BẢN ĐẦU: NHẬP THÔNG TIN MÁY TÍNH =====");
+
+        Console.Write("Mã thiết bị: ");
+        string id = Console.ReadLine() ?? "";
+        Console.Write("Tên thiết bị: ");
+        string name = Console.ReadLine() ?? "";
+        Console.Write("Năm đưa vào sử dụng: ");
+        int year = int.Parse(Console.ReadLine() ?? "0");
+        Console.Write("Giá mua: ");
+        decimal price = decimal.Parse(Console.ReadLine() ?? "0");
+        Console.Write("RAM (GB): ");
+        int ram = int.Parse(Console.ReadLine() ?? "0");
+        Console.Write("Loại bộ xử lý: ");
+        string cpu = Console.ReadLine() ?? "";
+        Console.Write("Có GPU rời? (y/n): ");
+        bool gpu = (Console.ReadLine() ?? "").Trim().ToLower() == "y";
+
+        Computer computer = new Computer(id, name, year, price, ram, cpu, gpu);
+
+        Console.WriteLine("\n===== THÔNG TIN THIẾT BỊ =====");
+        Console.WriteLine(computer);
+        Console.WriteLine($"Chi phí bảo trì dự kiến: {computer.CalculateAnnualMaintenanceCost():N0} VND");
+    }
+}
